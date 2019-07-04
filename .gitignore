@@ -1,0 +1,6 @@
+__pycache__/
+.idea/
+.DS_Store
+data/classes.json
+data/vocab.json
+output/best_model.weights
