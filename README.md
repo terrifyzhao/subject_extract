@@ -1,4 +1,4 @@
-HOW TO USE
+## **HOW TO USE**
 
 ---
 run the train.py file
