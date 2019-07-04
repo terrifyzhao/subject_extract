@@ -1,6 +1,5 @@
 ## **HOW TO USE**
 
----
 run the train.py file
 
 the main function of `train.py` has three hyperparams,`is_test` means whether to test
