@@ -4,11 +4,42 @@ import os
 import pandas as pd
 from data_utils import *
 from keras.callbacks import Callback
-from model import graph
+from model import Graph
+from keras_bert import Tokenizer
+import codecs
+import re
+import tensorflow as tf
 
 min_count = 2
 maxlen = 256
-char_size = 128
+
+dict_path = 'chinese_L-12_H-768_A-12/vocab.txt'
+
+token_dict = {}
+additional_chars = set()
+global graph
+graph = tf.get_default_graph()
+
+with codecs.open(dict_path, 'r', 'utf8') as reader:
+    for line in reader:
+        token = line.strip()
+        token_dict[token] = len(token_dict)
+
+
+class OurTokenizer(Tokenizer):
+    def _tokenize(self, text):
+        R = []
+        for c in text:
+            if c in self._token_dict:
+                R.append(c)
+            elif self._is_space(c):
+                R.append('[unused1]')  # space类用未经训练的[unused1]表示
+            else:
+                R.append('[UNK]')  # 剩余的字符是[UNK]
+        return R
+
+
+tokenizer = OurTokenizer(token_dict)
 
 
 def read_data():
@@ -57,7 +88,23 @@ def read_data():
     for id, t, c in zip(D[0], D[1], D[2]):
         test_data.append((id, t, c))
 
+    for d in train_data + dev_data:
+        additional_chars.update(re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', d[2]))
+
+    # additional_chars.remove(u'，')
+
     return train_data, dev_data, test_data, id2class, class2id, id2char, char2id
+
+
+def list_find(list1, list2):
+    """在list1中寻找子串list2，如果找到，返回第一个下标；
+    如果找不到，返回-1。
+    """
+    n_list2 = len(list2)
+    for i in range(len(list1)):
+        if list1[i: i + n_list2] == list2:
+            return i
+    return -1
 
 
 def data_generator(data, batch_size, char2id, class2id):
@@ -65,45 +112,75 @@ def data_generator(data, batch_size, char2id, class2id):
     while True:
         X, category, start, end = [], [], [], []
         for d in data:
-            question = d[0]
-            # 问题
-            x = [char2id.get(c, 1) for c in question]
-            # 类别
-            c = class2id[d[1]]
-            # 主体开始位置
-            s = question.find(d[2])
-            e = s + len(d[2]) - 1
-            X.append(x)
-            category.append([c])
-            start.append(s)
-            end.append(e)
-            if len(X) == batch_size or d == data[-1]:
-                X = pad_sequences(X, maxlen=max_len)
-                # category = pad_sequences(category, len(class2id))
-                start = one_hot(start, max_len)
-                end = one_hot(end, max_len)
-                yield [X, np.array(category), start, end], None
-                X, category, start, end = [], [], [], []
+            x = '___%s___%s' % (d[1], d[0])
+            tokens = tokenizer.tokenize(x)
+            e = d[2]
+            e_tokens = tokenizer.tokenize(e)[1:-1]
+
+            # start, end = np.zeros(len(tokens)), np.zeros(len(tokens))
+            s = list_find(tokens, e_tokens)
+            if s != -1:
+                e = s + len(e_tokens) - 1
+                x, c = tokenizer.encode(first=x)
+                X.append(x)
+                category.append(c)
+                start.append(s)
+                end.append(e)
+
+                if len(X) == batch_size or d == data[-1]:
+                    X = pad_sequences(X, maxlen=max_len)
+                    category = pad_sequences(category, max_len)
+                    start = one_hot(start, max_len)
+                    end = one_hot(end, max_len)
+                    yield [X, np.array(category), start, end], None
+                    X, category, start, end = [], [], [], []
+
+
+def softmax(x):
+    x = x - np.max(x)
+    x = np.exp(x)
+    return x / np.sum(x)
 
 
 def extract_entity(text_in, c_in, class2id, char2id, model):
     """解码函数，应自行添加更多规则，保证解码出来的是一个公司名
     """
-    if c_in not in class2id:
+    if c_in not in class2id.keys():
         return 'NaN'
-    _x = [char2id.get(c, 1) for c in text_in]
-    _x = np.array([_x])
-    _c = np.array([[class2id[c_in]]])
-    _ps1, _ps2 = model.predict([_x, _c])
-    start = _ps1[0].argmax()
-    end = _ps2[0][start:].argmax() + start
-
-    name = text_in[start: end + 1]
-    name.replace('(', '')
-    name.replace(')', '')
-    if len(name) > 10:
-        name = name[0:10]
-    return name
+    text_in = u'___%s___%s' % (c_in, text_in)
+    text_in = text_in[:510]
+    _tokens = tokenizer.tokenize(text_in)
+    _x1, _x2 = tokenizer.encode(first=text_in)
+    _x1, _x2 = np.array([_x1]), np.array([_x2])
+    with graph.as_default():
+        _ps1, _ps2 = model.predict([_x1, _x2])
+        _ps1, _ps2 = softmax(_ps1[0]), softmax(_ps2[0])
+        for i, _t in enumerate(_tokens):
+            if len(_t) == 1 and re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', _t) and _t not in additional_chars:
+                _ps1[i] -= 10
+        start = _ps1.argmax()
+        for end in range(start, len(_tokens)):
+            _t = _tokens[end]
+            if len(_t) == 1 and re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', _t) and _t not in additional_chars:
+                break
+        end = _ps2[start:end + 1].argmax() + start
+        a = text_in[start - 1: end]
+        return a
+    # if c_in not in class2id:
+    #     return 'NaN'
+    # _x = [char2id.get(c, 1) for c in text_in]
+    # _x = np.array([_x])
+    # _c = np.array([[class2id[c_in]]])
+    # _ps1, _ps2 = model.predict([_x, _c])
+    # start = _ps1[0].argmax()
+    # end = _ps2[0][start:].argmax() + start
+    #
+    # name = text_in[start: end + 1]
+    # name.replace('(', '')
+    # name.replace(')', '')
+    # if len(name) > 10:
+    #     name = name[0:10]
+    # return name
 
 
 class Evaluate(Callback):
@@ -143,20 +220,21 @@ def test(test_data, class2id, char2id, test_model):
 
 
 if __name__ == '__main__':
-    batch_size = 128
+    batch_size = 16
     learning_rate = 1e-4
     is_test = True
 
     train_data, dev_data, test_data, id2class, class2id, id2char, char2id = read_data()
-    model, test_model = graph(id2char, id2class, learning_rate=learning_rate)
+
+    model, test_model = Graph(learning_rate=learning_rate)
 
     if is_test:
         test_model.load_weights('output/best_model.weights')
         model.load_weights('output/best_model.weights')
         test(test_data, class2id, char2id, test_model)
     else:
-        test_model.load_weights('output/best_model.weights')
-        model.load_weights('output/best_model.weights')
+        # test_model.load_weights('output/best_model.weights')
+        # model.load_weights('output/best_model.weights')
 
         evaluator = Evaluate(dev_data, model, test_model, class2id, char2id)
 
