@@ -1,8 +1,7 @@
 from keras.layers import *
 from keras.models import Model
 import keras.backend as K
-from keras.optimizers import Adam
-from keras_bert import load_trained_model_from_checkpoint, Tokenizer
+from keras_bert import load_trained_model_from_checkpoint, AdamWarmup
 import tensorflow as tf
 
 embedding_size = 768
@@ -13,17 +12,17 @@ global graph
 graph = tf.get_default_graph()
 
 
-def Graph(learning_rate=1e-5):
+def Graph(total_steps, warmup_steps, lr=1e-3, min_lr=1e-5):
     with graph.as_default():
         bert_model = load_trained_model_from_checkpoint(config_path, checkpoint_path)
 
         for l in bert_model.layers:
             l.trainable = True
 
-        x_in = Input(shape=(None,))  # 待识别句子输入
-        c_in = Input(shape=(None,))  # 事件类型
-        start_in = Input(shape=(None,))  # 实体左边界（标签）
-        end_in = Input(shape=(None,))  # 实体右边界（标签）
+        x_in = Input(shape=(None,))
+        c_in = Input(shape=(None,))
+        start_in = Input(shape=(None,))
+        end_in = Input(shape=(None,))
 
         x, c, start, end = x_in, c_in, start_in, end_in
         x_mask = Lambda(lambda x: K.cast(K.greater(K.expand_dims(x, 2), 0), 'float32'))(x)
@@ -44,7 +43,7 @@ def Graph(learning_rate=1e-5):
         loss = loss1 + loss2
 
         train_model.add_loss(loss)
-        train_model.compile(optimizer=Adam(learning_rate))
+        train_model.compile(optimizer=AdamWarmup(total_steps, warmup_steps, lr, min_lr))
         train_model.summary()
 
         return train_model, test_model
