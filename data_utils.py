@@ -65,7 +65,7 @@ def pad_sequences(sequences, maxlen=None, dtype='int32', padding='post',
     return x
 
 
-def shuffle(*arrs):
+def shuffle(*arrs, seed=0):
     """ shuffle
 
     Shuffle 数据
@@ -81,5 +81,6 @@ def shuffle(*arrs):
     for i, arr in enumerate(arrs):
         assert len(arrs[0]) == len(arrs[i])
         arrs[i] = np.array(arr)
+    np.random.seed(seed)
     p = np.random.permutation(len(arrs[0]))
     return tuple(arr[p] for arr in arrs)

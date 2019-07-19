@@ -7,12 +7,16 @@ from keras.callbacks import Callback
 from model import Graph
 from keras_bert import Tokenizer, calc_train_steps
 import tensorflow as tf
+import re
+import keras.backend as K
 
 global graph
 graph = tf.get_default_graph()
 
 max_len = 200
+
 category_nums = 21
+seed = 10
 
 token_dict = {}
 dict_path = 'chinese_L-12_H-768_A-12/vocab.txt'
@@ -20,6 +24,8 @@ with open(dict_path, encoding='utf8') as file:
     for line in file.readlines():
         token = line.strip()
         token_dict[token] = len(token_dict)
+
+additional_chars = set()
 
 
 class OurTokenizer(Tokenizer):
@@ -42,6 +48,7 @@ def read_data():
     # 读取数据，排除“其他”类型，其他对应的结果是nan
     data = pd.read_csv('data/train.csv', header=None)
     data = data[data[2] != '其他']
+    data = data[data[1].str.len() <= 256]
 
     # 统计所有存在的事件类型
     if not os.path.exists('data/classes.json'):
@@ -58,9 +65,19 @@ def read_data():
             train_data.append((t, c, n))
 
     # shuffle一下并划分数据集
-    random_order = shuffle(train_data)[0].tolist()
-    train_data = random_order[0:int(0.9 * len(random_order))]
-    dev_data = random_order[int(0.9 * len(random_order)):]
+    random_order = shuffle(train_data, seed=seed)[0].tolist()
+    train_data = random_order[0:int(0.96 * len(random_order))]
+    dev_data = random_order[int(0.96 * len(random_order)):]
+
+    # 新数据
+    new_data = pd.read_csv('new_data.csv')
+    for t, c, n in new_data.values:
+        train_data.append((t, c, n))
+
+    for d in train_data + dev_data:
+        additional_chars.update(re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', d[2]))
+
+    additional_chars.remove(u'，')
 
     # 把验证集作为测试集
     dev = pd.read_csv('data/eval.csv', encoding='utf-8', header=None)
@@ -71,33 +88,65 @@ def read_data():
     return train_data, dev_data, test_data, id2class, class2id
 
 
-def data_generator(data, batch_size, class2id):
+def list_find(list1, list2):
+    """在list1中寻找子串list2，如果找到，返回第一个下标；
+    如果找不到，返回-1。
+    """
+    n_list2 = len(list2)
+    for i in range(len(list1)):
+        if list1[i: i + n_list2] == list2:
+            return i
+    return -1
+
+
+def seq_padding(X, padding=0):
+    L = [len(x) for x in X]
+    ML = max(L)
+    return np.array([
+        np.concatenate([x, [padding] * (ML - len(x))]) if len(x) < ML else x for x in X
+    ])
+
+
+def data_generator(data, batch_size):
     while True:
-        X, category, start, end = [], [], [], []
+        X, segment, start, end, max_length = [], [], [], [], 0
         for i, d in enumerate(data):
-            ques = d[0]
-            cat = d[1]
+            text, c = d[0][:max_len], d[1]
+            x = f'___{c}___{text}'
+            tokens = tokenizer.tokenize(x)
+            if len(tokens) > max_length:
+                max_length = len(tokens)
+
             sub = d[2]
-            s = ques.find(sub)
+            sub_token = tokenizer.tokenize(sub)[1:-1]
+            s = list_find(tokens, sub_token)
+            # s = x.find(sub)
             if s != -1:
-                e = s + len(sub) - 1
-                ques = tokenizer.tokenize(ques)
-                c = class2id.get(cat)
-                cat = tokenizer.tokenize(cat)
-                x, _ = tokenizer.encode(first=cat, second=ques)
+                e = s + len(sub_token) - 1
+
+                x, seg = tokenizer.encode(first=x)
 
                 X.append(x)
-                category.append(c)
+                segment.append(seg)
                 start.append(s)
                 end.append(e)
 
                 if len(X) == batch_size or i == len(data) - 1:
-                    X = pad_sequences(X, maxlen=max_len)
-                    category = one_hot(category, category_nums)
-                    start = one_hot(start, max_len)
-                    end = one_hot(end, max_len)
-                    yield [X, category, start, end], None
-                    X, category, start, end = [], [], [], []
+                    X = pad_sequences(X, maxlen=max_length)
+                    segment = pad_sequences(segment, maxlen=max_length)
+                    start = one_hot(start, max_length)
+                    end = one_hot(end, max_length)
+                    yield [X, segment, start, end], None
+                    X, segment, start, end, max_length = [], [], [], [], 0
+
+
+def softmax(x):
+    x = x - np.max(x)
+    x = np.exp(x)
+    return x / np.sum(x)
+
+
+new_data = []
 
 
 def extract_entity(text, category, class2id, model):
@@ -105,62 +154,89 @@ def extract_entity(text, category, class2id, model):
     """
     if category not in class2id.keys():
         return 'NaN'
-    text = tokenizer.tokenize(text)
-    category = tokenizer.tokenize(category)
-    x, _ = tokenizer.encode(first=category, second=text)
 
-    with graph.as_default():
-        prob_s, prob_e = model.predict([x, one_hot(category, category_nums)])
-        start = prob_s.argmax()
-        end = prob_e.argmax()
-        res = text[start:end + 1]
-        return res
+    text_in = u'___%s___%s' % (category, text)
+    text_in = text_in[:510]
+    _tokens = tokenizer.tokenize(text_in)
 
-    # text_in = u'___%s___%s' % (c_in, text_in)
-    # text_in = text_in[:510]
-    # _tokens = tokenizer.tokenize(text_in)
-    # _x1, _x2 = tokenizer.encode(first=text_in)
-    # _x1, _x2 = np.array([_x1]), np.array([_x2])
-    # with graph.as_default():
-    #     _ps1, _ps2 = model.predict([_x1, _x2])
-    #     _ps1, _ps2 = softmax(_ps1[0]), softmax(_ps2[0])
-    #     for i, _t in enumerate(_tokens):
-    #         if len(_t) == 1 and re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', _t) and _t not in additional_chars:
-    #             _ps1[i] -= 10
-    #     start = _ps1.argmax()
-    #     for end in range(start, len(_tokens)):
-    #         _t = _tokens[end]
-    #         if len(_t) == 1 and re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', _t) and _t not in additional_chars:
-    #             break
-    #     end = _ps2[start:end + 1].argmax() + start
-    #     a = text_in[start - 1: end]
-    #     return a
+    x, s = tokenizer.encode(first=text_in)
+    prob_s, prob_e = model.predict([np.array([x]), np.array([s])])
+    prob_s, prob_e = softmax(prob_s[0]), softmax(prob_e[0])
+    for i, t in enumerate(_tokens):
+        if len(t) == 1 and re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', t) and t not in additional_chars:
+            prob_s[i] -= 10
+    start = prob_s.argmax()
+
+    for end in range(start, len(_tokens)):
+        t = _tokens[end]
+        if len(t) == 1 and re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', t) and t not in additional_chars:
+            break
+    end = prob_e[start:end + 1].argmax() + start
+    res = text_in[start - 1: end]
+
+    if prob_s[start] > 0.95 and prob_e[end] > 0.95:
+        new_data.append([text, category, res])
+
+    return res
 
 
 class Evaluate(Callback):
     def __init__(self, data, model, test_model, class2id):
         self.ACC = []
         self.best = 0.
+        self.passed = 0
         self.dev_data = data
         self.model = model
         self.test_model = test_model
         self.class2id = class2id
 
+    def on_batch_begin(self, batch, logs=None):
+        """第一个epoch用来warmup，第二个epoch把学习率降到最低
+        """
+        if self.passed < self.params['steps']:
+            lr = (self.passed + 1.) / self.params['steps'] * learning_rate
+            K.set_value(self.model.optimizer.lr, lr)
+            self.passed += 1
+        elif self.params['steps'] <= self.passed < self.params['steps'] * 2:
+            lr = (2 - (self.passed + 1.) / self.params['steps']) * (learning_rate - min_learning_rate)
+            lr += min_learning_rate
+            K.set_value(self.model.optimizer.lr, lr)
+            self.passed += 1
+
     def on_epoch_end(self, epoch, logs=None):
         acc = self.evaluate()
         self.ACC.append(acc)
-        if acc > self.best:
+        if acc >= self.best:
             self.best = acc
             self.model.save_weights('output/subject_model.weights')
         print('epoch: %d, acc: %.4f, best acc: %.4f\n' % (epoch, acc, self.best))
 
     def evaluate(self):
         eps = 0
+        error_list = []
         for d in tqdm(iter(self.dev_data)):
             R = extract_entity(d[0], d[1], self.class2id, self.test_model)
             if R == d[2]:
                 eps += 1
+            else:
+                error_list.append((d[0], d[1], d[2], R))
+        with open('error.txt', 'w', encoding='utf-8')as file:
+            file.write(str(error_list))
         return eps / len(self.dev_data)
+
+
+def dev(dev_data, class2id, test_model):
+    eps = 0
+    error_list = []
+    for d in tqdm(iter(dev_data)):
+        R = extract_entity(d[0], d[1], class2id, test_model)
+        if R == d[2]:
+            eps += 1
+        else:
+            error_list.append((d[0], d[1], d[2], R))
+    with open('error.txt', 'w', encoding='utf-8')as file:
+        file.write(str(error_list))
+    return eps / len(dev_data)
 
 
 def test(test_data, class2id, test_model):
@@ -171,13 +247,19 @@ def test(test_data, class2id, test_model):
             s = str(d[0]) + ',' + extract_entity(d[1].replace('\t', ''), d[2], class2id, test_model)
             file.write(s + '\n')
 
+    print('length: ', len(new_data))
+    import json
+    dic = {'data': new_data}
+    with open('new_data.txt', 'w', encoding='utf-8')as file:
+        file.write(json.dumps(dic, ensure_ascii=False))
+
 
 if __name__ == '__main__':
     batch_size = 16
-    learning_rate = 1e-3
-    min_learning_rate = 1e-5
-    epochs = 10
-    is_test = False
+    learning_rate = 1e-4
+    min_learning_rate = 1e-6
+    epochs = 100
+    is_test = True
 
     train_data, dev_data, test_data, id2class, class2id = read_data()
 
@@ -194,12 +276,14 @@ if __name__ == '__main__':
         test_model.load_weights('output/subject_model.weights')
         model.load_weights('output/subject_model.weights')
         test(test_data, class2id, test_model)
+        # acc = dev(dev_data, class2id, test_model)
+        # print('acc: ', acc)
     else:
-        # test_model.load_weights('output/best_model.weights')
-        # model.load_weights('output/best_model.weights')
+        test_model.load_weights('output/subject_model.weights')
+        model.load_weights('output/subject_model.weights')
 
         evaluator = Evaluate(dev_data, model, test_model, class2id)
-        X = data_generator(train_data, batch_size, class2id)
+        X = data_generator(train_data, batch_size)
         steps = int((len(train_data) + batch_size - 1) / batch_size)
 
         model.fit_generator(X, steps_per_epoch=steps, epochs=epochs, callbacks=[evaluator])
