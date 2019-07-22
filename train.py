@@ -66,13 +66,15 @@ def read_data():
 
     # shuffle一下并划分数据集
     random_order = shuffle(train_data, seed=seed)[0].tolist()
-    train_data = random_order[0:int(0.96 * len(random_order))]
-    dev_data = random_order[int(0.96 * len(random_order)):]
+    train_data = random_order[0:int(0.98 * len(random_order))]
+    dev_data = random_order[int(0.98 * len(random_order)):]
 
     # 新数据
     new_data = pd.read_csv('new_data.csv')
     for t, c, n in new_data.values:
         train_data.append((t, c, n))
+
+    train_data = shuffle(train_data, seed=seed)[0].tolist()
 
     for d in train_data + dev_data:
         additional_chars.update(re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', d[2]))
@@ -112,19 +114,21 @@ def data_generator(data, batch_size):
         X, segment, start, end, max_length = [], [], [], [], 0
         for i, d in enumerate(data):
             text, c = d[0][:max_len], d[1]
-            x = f'___{c}___{text}'
-            tokens = tokenizer.tokenize(x)
-            if len(tokens) > max_length:
-                max_length = len(tokens)
+            # x = f'___{c}___{text}'
+            # tokens = tokenizer.tokenize(first=text, second=c)
+            # if len(tokens) > max_length:
+            #     max_length = len(tokens)
 
             sub = d[2]
-            sub_token = tokenizer.tokenize(sub)[1:-1]
-            s = list_find(tokens, sub_token)
-            # s = x.find(sub)
+            # sub_token = tokenizer.tokenize(sub)[1:-1]
+            # s = list_find(tokens, sub_token)
+            s = text.find(sub)
             if s != -1:
-                e = s + len(sub_token) - 1
+                e = s + len(sub) - 1
 
-                x, seg = tokenizer.encode(first=x)
+                x, seg = tokenizer.encode(first=text, second=c)
+                if len(x) > max_length:
+                    max_length = len(x)
 
                 X.append(x)
                 segment.append(seg)
@@ -155,26 +159,28 @@ def extract_entity(text, category, class2id, model):
     if category not in class2id.keys():
         return 'NaN'
 
-    text_in = u'___%s___%s' % (category, text)
-    text_in = text_in[:510]
-    _tokens = tokenizer.tokenize(text_in)
-
-    x, s = tokenizer.encode(first=text_in)
+    # text_in = u'___%s___%s' % (category, text)
+    # text_in = text_in[:510]
+    # _tokens = tokenizer.tokenize(text_in)
+    # _tokens = tokenizer.tokenize(first=text, second=category)
+    text = text[:400]
+    x, s = tokenizer.encode(first=text, second=category, max_len=512)
     prob_s, prob_e = model.predict([np.array([x]), np.array([s])])
     prob_s, prob_e = softmax(prob_s[0]), softmax(prob_e[0])
-    for i, t in enumerate(_tokens):
+
+    for i, t in enumerate(text):
         if len(t) == 1 and re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', t) and t not in additional_chars:
             prob_s[i] -= 10
     start = prob_s.argmax()
 
-    for end in range(start, len(_tokens)):
-        t = _tokens[end]
+    for end in range(start, len(text)):
+        t = text[end]
         if len(t) == 1 and re.findall(u'[^\u4e00-\u9fa5a-zA-Z0-9\*]', t) and t not in additional_chars:
             break
     end = prob_e[start:end + 1].argmax() + start
-    res = text_in[start - 1: end]
+    res = ''.join(text[start: end + 1])
 
-    if prob_s[start] > 0.95 and prob_e[end] > 0.95:
+    if prob_s[start] > 0.9 and prob_e[end] > 0.9:
         new_data.append([text, category, res])
 
     return res
@@ -256,10 +262,10 @@ def test(test_data, class2id, test_model):
 
 if __name__ == '__main__':
     batch_size = 16
-    learning_rate = 1e-4
-    min_learning_rate = 1e-6
+    learning_rate = 1e-3
+    min_learning_rate = 1e-5
     epochs = 100
-    is_test = True
+    is_test = False
 
     train_data, dev_data, test_data, id2class, class2id = read_data()
 
@@ -286,4 +292,4 @@ if __name__ == '__main__':
         X = data_generator(train_data, batch_size)
         steps = int((len(train_data) + batch_size - 1) / batch_size)
 
-        model.fit_generator(X, steps_per_epoch=steps, epochs=epochs, callbacks=[evaluator])
+        model.fit_generator(X, steps_per_epoch=100, epochs=epochs, callbacks=[evaluator])
