@@ -13,7 +13,7 @@ from data_utils import *
 
 mode = 0
 maxlen = 128
-learning_rate = 1e-4
+learning_rate = 5e-5
 min_learning_rate = 1e-5
 
 config_path = 'chinese_L-12_H-768_A-12/bert_config.json'
@@ -65,10 +65,10 @@ else:
 dev_data = [train_data[j] for i, j in enumerate(random_order) if i % 9 == mode]
 train_data = [train_data[j] for i, j in enumerate(random_order) if i % 9 != mode]
 # 新数据
-# new_data = pd.read_csv('new_data.csv')
-# for t, c, n in new_data.values:
-#     train_data.append((t, c, n))
-# shuffle(train_data, seed=0)[0].tolist()
+new_data = pd.read_csv('new_data.csv')
+for t, c, n in new_data.values:
+    train_data.append((t, c, n))
+shuffle(train_data, seed=0)[0].tolist()
 
 additional_chars = set()
 for d in train_data + dev_data:
@@ -239,30 +239,34 @@ x_mask = Lambda(lambda x: K.cast(K.greater(K.expand_dims(x, 2), 0), 'float32'))(
 
 x = bert_model([x1, x2])
 
-# x_s = Attention(16, 48)([x, x, x, x_mask, x_mask])
-# x_s = Lambda(lambda x: x[0] + x[1])([x, x_s])
-# x_s = LayerNormalization()(x_s)
-# x_s_co = Dense(768, use_bias=False)(x_s)
-# x_s_out = Lambda(lambda x: x[0] + x[1])([x_s, x_s_co])
-# x_s_out = LayerNormalization()(x_s_out)
-# x_s_out = Lambda(lambda x: x[0] * x[1])([x_s_out, x_mask])
-# ps1 = Dense(1, use_bias=False)(x_s_out)
-# ps1 = Lambda(lambda x: x[0][..., 0] - (1 - x[1][..., 0]) * 1e10)([ps1, x_mask])
-#
-# x_e = Attention(16, 48)([x, x, x, x_mask, x_mask])
-# x_e = Lambda(lambda x: x[0] + x[1])([x, x_e])
-# x_e = LayerNormalization()(x_e)
-# x_e_co = Dense(768, use_bias=False)(x_e)
-# x_e_out = Lambda(lambda x: x[0] + x[1])([x_e, x_e_co])
-# x_e_out = LayerNormalization()(x_e_out)
-# x_e_out = Lambda(lambda x: x[0] * x[1])([x_e_out, x_mask])
-# ps2 = Dense(1, use_bias=False)(x_e_out)
-# ps2 = Lambda(lambda x: x[0][..., 0] - (1 - x[1][..., 0]) * 1e10)([ps2, x_mask])
-
-ps1 = Dense(1, use_bias=False)(x)
+x_s = Attention(12, 64)([x, x, x, x_mask, x_mask])
+x_s = Lambda(lambda x: x[0] + x[1])([x, x_s])
+x_s = LayerNormalization()(x_s)
+x_s_co = Dense(768, use_bias=False)(x_s)
+x_s_out = Lambda(lambda x: x[0] + x[1])([x_s, x_s_co])
+x_s_out = LayerNormalization()(x_s_out)
+x_s_out = Lambda(lambda x: x[0] * x[1])([x_s_out, x_mask])
+x_s_out = Bidirectional(CuDNNLSTM(768 // 2, return_sequences=True))(x_s_out)
+x_s_out = Lambda(lambda x: x[0] * x[1])([x_s_out, x_mask])
+ps1 = Dense(1, use_bias=False)(x_s_out)
 ps1 = Lambda(lambda x: x[0][..., 0] - (1 - x[1][..., 0]) * 1e10)([ps1, x_mask])
-ps2 = Dense(1, use_bias=False)(x)
+
+x_e = Attention(16, 48)([x, x, x, x_mask, x_mask])
+x_e = Lambda(lambda x: x[0] + x[1])([x, x_e])
+x_e = LayerNormalization()(x_e)
+x_e_co = Dense(768, use_bias=False)(x_e)
+x_e_out = Lambda(lambda x: x[0] + x[1])([x_e, x_e_co])
+x_e_out = LayerNormalization()(x_e_out)
+x_e_out = Lambda(lambda x: x[0] * x[1])([x_e_out, x_mask])
+x_e_out = Bidirectional(CuDNNLSTM(768 // 2, return_sequences=True))(x_e_out)
+x_e_out = Lambda(lambda x: x[0] * x[1])([x_e_out, x_mask])
+ps2 = Dense(1, use_bias=False)(x_e_out)
 ps2 = Lambda(lambda x: x[0][..., 0] - (1 - x[1][..., 0]) * 1e10)([ps2, x_mask])
+
+# ps1 = Dense(1, use_bias=False)(x)
+# ps1 = Lambda(lambda x: x[0][..., 0] - (1 - x[1][..., 0]) * 1e10)([ps1, x_mask])
+# ps2 = Dense(1, use_bias=False)(x)
+# ps2 = Lambda(lambda x: x[0][..., 0] - (1 - x[1][..., 0]) * 1e10)([ps2, x_mask])
 
 model = Model([x1_in, x2_in], [ps1, ps2])
 
@@ -308,7 +312,7 @@ def extract_entity(text_in, c_in):
     end = _ps2[start:end + 1].argmax() + start
     a = text_in[start - 1: end]
 
-    if _ps1[start] > 0.9 and _ps2[end] > 0.9:
+    if _ps1[start] > 0.8:
         new_data_list.append([text_in, c_in, a])
 
     return a
