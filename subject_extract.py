@@ -251,7 +251,7 @@ x_s_out = Lambda(lambda x: x[0] * x[1])([x_s_out, x_mask])
 ps1 = Dense(1, use_bias=False)(x_s_out)
 ps1 = Lambda(lambda x: x[0][..., 0] - (1 - x[1][..., 0]) * 1e10)([ps1, x_mask])
 
-x_e = Attention(16, 48)([x, x, x, x_mask, x_mask])
+x_e = Attention(12, 64)([x, x, x, x_mask, x_mask])
 x_e = Lambda(lambda x: x[0] + x[1])([x, x_e])
 x_e = LayerNormalization()(x_e)
 x_e_co = Dense(768, use_bias=False)(x_e)
