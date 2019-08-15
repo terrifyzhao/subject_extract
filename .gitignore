@@ -4,3 +4,4 @@ __pycache__/
 data/classes.json
 data/vocab.json
 output/best_model.weights
+chinese_L-12_H-768_A-12/

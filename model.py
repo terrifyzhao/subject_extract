@@ -6,8 +6,10 @@ import tensorflow as tf
 from keras_layer_normalization import LayerNormalization
 
 embedding_size = 768
-config_path = 'chinese_L-12_H-768_A-12/bert_config.json'
-checkpoint_path = 'chinese_L-12_H-768_A-12/bert_model.ckpt'
+# config_path = 'chinese_L-12_H-768_A-12/bert_config.json'
+config_path = 'publish/bert_config.json'
+# checkpoint_path = 'chinese_L-12_H-768_A-12/bert_model.ckpt'
+checkpoint_path = 'publish/bert_model.ckpt'
 
 global graph
 graph = tf.get_default_graph()

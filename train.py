@@ -217,18 +217,28 @@ class Evaluate(Callback):
             self.model.save_weights('output/subject_model.weights')
         print('epoch: %d, acc: %.4f, best acc: %.4f\n' % (epoch, acc, self.best))
 
+    # def evaluate(self):
+    #     eps = 0
+    #     error_list = []
+    #     for d in tqdm(iter(self.dev_data)):
+    #         R = extract_entity(d[0], d[1], self.class2id, self.test_model)
+    #         if R == d[2]:
+    #             eps += 1
+    #         else:
+    #             error_list.append((d[0], d[1], d[2], R))
+    #     with open('error.txt', 'w', encoding='utf-8')as file:
+    #         file.write(str(error_list))
+    #     return eps / len(self.dev_data)
+
     def evaluate(self):
         eps = 0
-        error_list = []
         for d in tqdm(iter(self.dev_data)):
             R = extract_entity(d[0], d[1], self.class2id, self.test_model)
             if R == d[2]:
                 eps += 1
-            else:
-                error_list.append((d[0], d[1], d[2], R))
-        with open('error.txt', 'w', encoding='utf-8')as file:
-            file.write(str(error_list))
-        return eps / len(self.dev_data)
+        pre = eps / len(self.dev_data)
+
+        return 2 * pre / (pre + 1)
 
 
 def dev(dev_data, class2id, test_model):
@@ -242,7 +252,9 @@ def dev(dev_data, class2id, test_model):
             error_list.append((d[0], d[1], d[2], R))
     with open('error.txt', 'w', encoding='utf-8')as file:
         file.write(str(error_list))
-    return eps / len(dev_data)
+
+    pre = eps / len(dev_data)
+    return (2 * pre) / (1 + pre)
 
 
 def test(test_data, class2id, test_model):
@@ -285,8 +297,8 @@ if __name__ == '__main__':
         # acc = dev(dev_data, class2id, test_model)
         # print('acc: ', acc)
     else:
-        test_model.load_weights('output/subject_model.weights')
-        model.load_weights('output/subject_model.weights')
+        # test_model.load_weights('output/subject_model.weights')
+        # model.load_weights('output/subject_model.weights')
 
         evaluator = Evaluate(dev_data, model, test_model, class2id)
         X = data_generator(train_data, batch_size)
