@@ -102,10 +102,9 @@ def list_find(list1, list2):
 
 
 def seq_padding(X, padding=0):
-    L = [len(x) for x in X]
-    ML = max(L)
+    max_len = max([len(x) for x in X])
     return np.array([
-        np.concatenate([x, [padding] * (ML - len(x))]) if len(x) < ML else x for x in X
+        np.concatenate([x, [padding] * (max_len - len(x))]) if len(x) < max_len else x for x in X
     ])
 
 
